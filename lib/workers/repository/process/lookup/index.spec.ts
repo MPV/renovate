@@ -3152,6 +3152,201 @@ describe('workers/repository/process/lookup/index', () => {
       });
     });
 
+    describe('pinDigestVersionStrategy', () => {
+      const semverRegex =
+        'regex:^v?(?<major>\\d+)(\\.(?<minor>\\d+)\\.(?<patch>\\d+))?$';
+
+      it('pins a coarse value to the granular version sharing the digest', async () => {
+        config.currentValue = 'v1';
+        config.pinDigests = true;
+        config.pinDigestVersionStrategy = 'granular';
+        config.packageName = 'daisaru11/tfupdate-github-actions';
+        config.datasource = GithubTagsDatasource.id;
+        config.versioning = semverRegex;
+
+        getGithubTags.mockResolvedValueOnce({
+          releases: [
+            {
+              version: 'v1.0.0',
+              gitRef: 'v1.0.0',
+              newDigest: 'be636ef',
+              releaseTimestamp: '2022-01-01' as Timestamp,
+            },
+          ],
+        });
+        vi.spyOn(
+          GithubTagsDatasource.prototype,
+          'getDigest',
+        ).mockResolvedValueOnce('be636ef');
+
+        const { updates } = await Result.wrap(
+          lookup.lookupUpdates(config),
+        ).unwrapOrThrow();
+
+        expect(updates).toMatchObject([
+          {
+            isPinDigest: true,
+            newDigest: 'be636ef',
+            newValue: 'v1.0.0',
+            updateType: 'pinDigest',
+          },
+        ]);
+      });
+
+      it('keeps the coarse value when strategy is the default `as-is`', async () => {
+        config.currentValue = 'v1';
+        config.pinDigests = true;
+        config.packageName = 'daisaru11/tfupdate-github-actions';
+        config.datasource = GithubTagsDatasource.id;
+        config.versioning = semverRegex;
+
+        getGithubTags.mockResolvedValueOnce({
+          releases: [
+            {
+              version: 'v1.0.0',
+              gitRef: 'v1.0.0',
+              newDigest: 'be636ef',
+              releaseTimestamp: '2022-01-01' as Timestamp,
+            },
+          ],
+        });
+        vi.spyOn(
+          GithubTagsDatasource.prototype,
+          'getDigest',
+        ).mockResolvedValueOnce('be636ef');
+
+        const { updates } = await Result.wrap(
+          lookup.lookupUpdates(config),
+        ).unwrapOrThrow();
+
+        expect(updates).toMatchObject([
+          {
+            isPinDigest: true,
+            newDigest: 'be636ef',
+            newValue: 'v1',
+            updateType: 'pinDigest',
+          },
+        ]);
+      });
+
+      it('keeps the coarse value when no released version shares the digest', async () => {
+        config.currentValue = 'v1';
+        config.pinDigests = true;
+        config.pinDigestVersionStrategy = 'granular';
+        config.packageName = 'daisaru11/tfupdate-github-actions';
+        config.datasource = GithubTagsDatasource.id;
+        config.versioning = semverRegex;
+
+        getGithubTags.mockResolvedValueOnce({
+          releases: [
+            {
+              version: 'v1.0.0',
+              gitRef: 'v1.0.0',
+              newDigest: 'other000',
+              releaseTimestamp: '2022-01-01' as Timestamp,
+            },
+          ],
+        });
+        vi.spyOn(
+          GithubTagsDatasource.prototype,
+          'getDigest',
+        ).mockResolvedValueOnce('be636ef');
+
+        const { updates } = await Result.wrap(
+          lookup.lookupUpdates(config),
+        ).unwrapOrThrow();
+
+        expect(updates).toMatchObject([
+          {
+            isPinDigest: true,
+            newDigest: 'be636ef',
+            newValue: 'v1',
+            updateType: 'pinDigest',
+          },
+        ]);
+      });
+
+      it('leaves a non-version moving tag unchanged', async () => {
+        config.currentValue = 'latest';
+        config.pinDigests = true;
+        config.pinDigestVersionStrategy = 'granular';
+        config.packageName = 'daisaru11/tfupdate-github-actions';
+        config.datasource = GithubTagsDatasource.id;
+        config.versioning = semverRegex;
+
+        getGithubTags.mockResolvedValueOnce({
+          releases: [
+            {
+              version: 'v1.0.0',
+              gitRef: 'v1.0.0',
+              newDigest: 'be636ef',
+              releaseTimestamp: '2022-01-01' as Timestamp,
+            },
+          ],
+        });
+        vi.spyOn(
+          GithubTagsDatasource.prototype,
+          'getDigest',
+        ).mockResolvedValueOnce('be636ef');
+
+        const { updates } = await Result.wrap(
+          lookup.lookupUpdates(config),
+        ).unwrapOrThrow();
+
+        expect(updates).toMatchObject([
+          {
+            isPinDigest: true,
+            newDigest: 'be636ef',
+            newValue: 'latest',
+            updateType: 'pinDigest',
+          },
+        ]);
+      });
+
+      it('does not downgrade a value that is already granular', async () => {
+        config.currentValue = 'v1.0.0';
+        config.pinDigests = true;
+        config.pinDigestVersionStrategy = 'granular';
+        config.packageName = 'daisaru11/tfupdate-github-actions';
+        config.datasource = GithubTagsDatasource.id;
+        config.versioning = semverRegex;
+
+        getGithubTags.mockResolvedValueOnce({
+          releases: [
+            {
+              version: 'v1',
+              gitRef: 'v1',
+              newDigest: 'be636ef',
+              releaseTimestamp: '2022-01-01' as Timestamp,
+            },
+            {
+              version: 'v1.0.0',
+              gitRef: 'v1.0.0',
+              newDigest: 'be636ef',
+              releaseTimestamp: '2022-01-01' as Timestamp,
+            },
+          ],
+        });
+        vi.spyOn(
+          GithubTagsDatasource.prototype,
+          'getDigest',
+        ).mockResolvedValueOnce('be636ef');
+
+        const { updates } = await Result.wrap(
+          lookup.lookupUpdates(config),
+        ).unwrapOrThrow();
+
+        expect(updates).toMatchObject([
+          {
+            isPinDigest: true,
+            newDigest: 'be636ef',
+            newValue: 'v1.0.0',
+            updateType: 'pinDigest',
+          },
+        ]);
+      });
+    });
+
     it('should use registry of update to determine digest', async () => {
       config.currentValue = 'v1.0.0';
       config.registryUrls = [

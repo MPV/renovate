@@ -3999,6 +3999,32 @@ Add to this object if you wish to define rules that apply only to PRs that pin d
 
 If enabled Renovate will pin Docker images or GitHub Actions by means of their SHA256 digest and not only by tag so that they are immutable.
 
+## `pinDigestVersionStrategy`
+
+Controls which version string Renovate writes as the comment when it pins a digest.
+
+Values:
+
+- `as-is` (default): keep the value that's already in the file, e.g. pinning `actions/checkout@v1` produces `actions/checkout@<digest> # v1`.
+- `granular`: if the pinned value is a coarse version tag (e.g. `v1`) that resolves to the same digest as a more specific released version (e.g. `v1.0.0`), Renovate writes that more specific version as the comment, e.g. `actions/checkout@<digest> # v1.0.0`.
+
+The `granular` strategy only rewrites the comment when the current value is a valid version _and_ a more granular release shares the same digest.
+Non-version tags (like `latest`) and values that already are the most granular version are left unchanged.
+
+This is most useful together with [`helpers:pinGitHubActionDigests`](https://docs.renovatebot.com/presets-helpers/#helperspingithubactiondigests):
+
+```json
+{
+  "packageRules": [
+    {
+      "matchDepTypes": ["action"],
+      "pinDigests": true,
+      "pinDigestVersionStrategy": "granular"
+    }
+  ]
+}
+```
+
 ## `platformAutomerge`
 
 !!! note

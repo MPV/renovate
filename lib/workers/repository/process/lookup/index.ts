@@ -44,6 +44,32 @@ import {
   isReplacementRulesConfigured,
 } from './utils.ts';
 
+/**
+ * Given a coarse pinned value (e.g. `v1`) and the digest it resolves to, return
+ * a more granular released version that is equal to it and shares that same
+ * digest (e.g. `v1.0.0`). Returns `null` when `currentValue` is not a version,
+ * or when no more granular equal release exists, so callers keep the original
+ * value.
+ */
+function getGranularPinValue(
+  currentValue: string,
+  currentDigest: string,
+  releases: Release[],
+  versioningApi: allVersioning.VersioningApi,
+): string | null {
+  if (!versioningApi.isValid(currentValue)) {
+    return null;
+  }
+  const match = releases.find(
+    (release) =>
+      release.newDigest === currentDigest &&
+      release.version.length > currentValue.length &&
+      versioningApi.isValid(release.version) &&
+      versioningApi.equals(release.version, currentValue),
+  );
+  return match?.version ?? null;
+}
+
 async function getTimestamp(
   config: LookupUpdateConfig,
   versions: Release[],
@@ -742,6 +768,25 @@ export async function lookupUpdates(
           }
         } else {
           delete update.newDigest;
+        }
+        // When `pinDigestVersionStrategy` is `granular`, rewrite the pinned
+        // comment from a coarse value (e.g. `v1`) to the most specific released
+        // version that resolves to the same digest (e.g. `v1.0.0`).
+        if (
+          update.isPinDigest &&
+          config.pinDigestVersionStrategy === 'granular' &&
+          isNonEmptyString(update.newValue) &&
+          isNonEmptyString(update.newDigest)
+        ) {
+          const granularValue = getGranularPinValue(
+            update.newValue,
+            update.newDigest,
+            dependency?.releases ?? [],
+            versioningApi,
+          );
+          if (granularValue) {
+            update.newValue = granularValue;
+          }
         }
         if (update.newVersion) {
           const registryUrl = dependency?.releases?.find(

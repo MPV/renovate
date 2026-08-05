@@ -127,6 +127,7 @@ export interface RenovateSharedConfig {
   npmToken?: string;
 
   pinDigests?: boolean;
+  pinDigestVersionStrategy?: 'as-is' | 'granular';
   platformAutomerge?: boolean;
   platformCommit?: PlatformCommitOptions;
   postUpgradeTasks?: PostUpgradeTasks;

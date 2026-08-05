@@ -1820,6 +1820,14 @@ const options: Readonly<RenovateOptions>[] = [
     default: false,
   },
   {
+    name: 'pinDigestVersionStrategy',
+    description:
+      'Controls which version string Renovate writes as the comment when pinning a digest.',
+    type: 'string',
+    allowedValues: ['as-is', 'granular'],
+    default: 'as-is',
+  },
+  {
     name: 'separateMajorMinor',
     description:
       'If set to `false`, Renovate will upgrade dependencies to their latest release only. Renovate will not separate major or minor branches.',
