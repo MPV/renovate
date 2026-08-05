@@ -48,8 +48,12 @@ import {
  * Given a coarse pinned value (e.g. `v1`) and the digest it resolves to, return
  * a more granular released version that is equal to it and shares that same
  * digest (e.g. `v1.0.0`). Returns `null` when `currentValue` is not a version,
- * or when no more granular equal release exists, so callers keep the original
- * value.
+ * or when no such release exists, so callers keep the original value.
+ *
+ * The digest match is what ties the granular label to the pinned commit: out of
+ * a list that may contain many versions, only the release that resolves to the
+ * same digest _and_ is `equals()` to the coarse value _and_ is more granular (a
+ * longer version string) is selected.
  */
 function getGranularPinValue(
   currentValue: string,

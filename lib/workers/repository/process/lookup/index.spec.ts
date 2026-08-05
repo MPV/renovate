@@ -3345,6 +3345,98 @@ describe('workers/repository/process/lookup/index', () => {
           },
         ]);
       });
+
+      it('selects the granular version that matches the digest, not a higher one', async () => {
+        // The release list holds several versions; only the release that both
+        // shares the pinned digest and is equal to `v1` must be chosen.
+        config.currentValue = 'v1';
+        config.pinDigests = true;
+        config.pinDigestVersionStrategy = 'granular';
+        config.packageName = 'daisaru11/tfupdate-github-actions';
+        config.datasource = GithubTagsDatasource.id;
+        config.versioning = semverRegex;
+
+        getGithubTags.mockResolvedValueOnce({
+          releases: [
+            {
+              version: 'v1.0.0',
+              gitRef: 'v1.0.0',
+              newDigest: 'be636ef',
+              releaseTimestamp: '2022-01-01' as Timestamp,
+            },
+            {
+              version: 'v1.1.0',
+              gitRef: 'v1.1.0',
+              newDigest: 'aaa111',
+              releaseTimestamp: '2022-02-01' as Timestamp,
+            },
+            {
+              version: 'v2.0.0',
+              gitRef: 'v2.0.0',
+              newDigest: 'bbb222',
+              releaseTimestamp: '2022-03-01' as Timestamp,
+            },
+          ],
+        });
+        vi.spyOn(
+          GithubTagsDatasource.prototype,
+          'getDigest',
+        ).mockResolvedValueOnce('be636ef');
+
+        const { updates } = await Result.wrap(
+          lookup.lookupUpdates(config),
+        ).unwrapOrThrow();
+
+        // Higher versions still produce their own update entries; the pin must
+        // resolve specifically to the digest-matching, equal `v1.0.0`.
+        expect(updates).toContainEqual(
+          expect.objectContaining({
+            isPinDigest: true,
+            newDigest: 'be636ef',
+            newValue: 'v1.0.0',
+            updateType: 'pinDigest',
+          }),
+        );
+      });
+
+      it('does not rewrite when the matching-digest release is not equal', async () => {
+        // `v1` resolves to a commit only tagged with a non-equal version
+        // (`v2.0.0`); the value must be left unchanged rather than mislabeled.
+        config.currentValue = 'v1';
+        config.pinDigests = true;
+        config.pinDigestVersionStrategy = 'granular';
+        config.packageName = 'daisaru11/tfupdate-github-actions';
+        config.datasource = GithubTagsDatasource.id;
+        config.versioning = semverRegex;
+
+        getGithubTags.mockResolvedValueOnce({
+          releases: [
+            {
+              version: 'v2.0.0',
+              gitRef: 'v2.0.0',
+              newDigest: 'be636ef',
+              releaseTimestamp: '2022-01-01' as Timestamp,
+            },
+          ],
+        });
+        vi.spyOn(
+          GithubTagsDatasource.prototype,
+          'getDigest',
+        ).mockResolvedValueOnce('be636ef');
+
+        const { updates } = await Result.wrap(
+          lookup.lookupUpdates(config),
+        ).unwrapOrThrow();
+
+        expect(updates).toContainEqual(
+          expect.objectContaining({
+            isPinDigest: true,
+            newDigest: 'be636ef',
+            newValue: 'v1',
+            updateType: 'pinDigest',
+          }),
+        );
+      });
     });
 
     it('should use registry of update to determine digest', async () => {
