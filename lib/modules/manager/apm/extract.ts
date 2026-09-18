@@ -1,4 +1,4 @@
-import { isTruthy } from '@sindresorhus/is';
+import { isString, isTruthy } from '@sindresorhus/is';
 import { logger } from '../../../logger/index.ts';
 import { coerceArray } from '../../../util/array.ts';
 import { detectPlatform } from '../../../util/common.ts';
@@ -9,6 +9,7 @@ import { GitTagsDatasource } from '../../datasource/git-tags/index.ts';
 import { GithubTagsDatasource } from '../../datasource/github-tags/index.ts';
 import { GitlabTagsDatasource } from '../../datasource/gitlab-tags/index.ts';
 import type { PackageDependency, PackageFileContent } from '../types.ts';
+import type { ApmDependencyEntry, ApmObjectDependency } from './schema.ts';
 import { ApmManifest } from './schema.ts';
 
 interface DatasourceResult {
@@ -239,13 +240,59 @@ export function parseApmDependency(
   };
 }
 
+/**
+ * Parse the object form of an APM dependency entry.
+ *
+ * Exactly one of `git`, `id`, `path` or `registry` identifies the source. None
+ * of them is updatable yet, but each is reported with a `skipReason` rather
+ * than dropped, so an unsupported entry is visibly unsupported instead of
+ * looking up to date.
+ */
+export function parseApmObjectDependency(
+  entry: ApmObjectDependency,
+  depType: string,
+): PackageDependency {
+  if (entry.path) {
+    // A local dependency has no upstream to track.
+    return { depName: entry.path, depType, skipReason: 'local-dependency' };
+  }
+
+  const registryPackage = entry.id ?? entry.registry;
+  if (registryPackage) {
+    // Resolved through APM's registry/marketplace, for which Renovate has no
+    // datasource.
+    return {
+      depName: registryPackage,
+      depType,
+      ...(entry.version ? { currentValue: entry.version } : {}),
+      skipReason: 'unsupported-datasource',
+    };
+  }
+
+  if (entry.git) {
+    // Git-backed, so updatable in principle - but the ref lives on its own key
+    // rather than in the entry string, which needs a separate write-back path.
+    return {
+      depName: entry.git,
+      depType,
+      ...(entry.ref ? { currentValue: entry.ref } : {}),
+      skipReason: 'unsupported',
+    };
+  }
+
+  logger.debug({ entry }, 'apm: object entry declares no known source');
+  return { depType, skipReason: 'invalid-dependency-specification' };
+}
+
 function extractSection(
-  entries: string[] | undefined,
+  entries: ApmDependencyEntry[] | undefined,
   depType: string,
   findPinnedTail: (value: string) => PinnedTail | undefined,
 ): PackageDependency[] {
   return coerceArray(entries).map((entry) =>
-    parseApmDependency(entry, depType, findPinnedTail),
+    isString(entry)
+      ? parseApmDependency(entry, depType, findPinnedTail)
+      : parseApmObjectDependency(entry, depType),
   );
 }
 

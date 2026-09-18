@@ -366,12 +366,12 @@ describe('modules/manager/apm/extract', () => {
       ]);
     });
 
-    it('ignores MCP entries and non-string entries', () => {
+    it('ignores MCP entries and reports an object entry with no known source', () => {
       const content = codeBlock`
         dependencies:
           apm:
             - owner/repo#v1.0.0
-            - name: nested-object-should-be-skipped
+            - name: object-with-no-source-discriminator
           mcp:
             - name: io.github.github/github-mcp-server
               transport: http
@@ -387,6 +387,109 @@ describe('modules/manager/apm/extract', () => {
           autoReplaceStringTemplate:
             '{{depName}}#{{#if newDigest}}{{newDigest}} # {{newValue}}{{else}}{{newValue}}{{/if}}',
         },
+        { depType: 'apm', skipReason: 'invalid-dependency-specification' },
+      ]);
+    });
+  });
+
+  describe('object form entries', () => {
+    it('reports a local path dependency as skipped', () => {
+      const content = codeBlock`
+        dependencies:
+          apm:
+            - path: ./local/skills
+      `;
+      expect(extractPackageFile(content, packageFile)?.deps).toEqual([
+        {
+          depName: './local/skills',
+          depType: 'apm',
+          skipReason: 'local-dependency',
+        },
+      ]);
+    });
+
+    it('reports a registry id with its version but no datasource', () => {
+      const content = codeBlock`
+        dependencies:
+          apm:
+            - id: some-registry-package
+              version: 1.2.3
+      `;
+      expect(extractPackageFile(content, packageFile)?.deps).toEqual([
+        {
+          depName: 'some-registry-package',
+          depType: 'apm',
+          currentValue: '1.2.3',
+          skipReason: 'unsupported-datasource',
+        },
+      ]);
+    });
+
+    it('reports a registry-named entry without a version', () => {
+      const content = codeBlock`
+        dependencies:
+          apm:
+            - registry: some-registry
+      `;
+      expect(extractPackageFile(content, packageFile)?.deps).toEqual([
+        {
+          depName: 'some-registry',
+          depType: 'apm',
+          skipReason: 'unsupported-datasource',
+        },
+      ]);
+    });
+
+    it('reports a git entry with its ref, pending write-back support', () => {
+      const content = codeBlock`
+        dependencies:
+          apm:
+            - git: https://github.com/github/awesome-copilot.git
+              ref: main
+              skills:
+                - conventional-commit
+              alias: github-awesome-copilot
+      `;
+      expect(extractPackageFile(content, packageFile)?.deps).toEqual([
+        {
+          depName: 'https://github.com/github/awesome-copilot.git',
+          depType: 'apm',
+          currentValue: 'main',
+          skipReason: 'unsupported',
+        },
+      ]);
+    });
+
+    it('reports a git entry with no ref', () => {
+      const content = codeBlock`
+        devDependencies:
+          apm:
+            - git: https://github.com/owner/repo.git
+      `;
+      expect(extractPackageFile(content, packageFile)?.deps).toEqual([
+        {
+          depName: 'https://github.com/owner/repo.git',
+          depType: 'apm-dev',
+          skipReason: 'unsupported',
+        },
+      ]);
+    });
+
+    it('keeps string and object entries side by side', () => {
+      const content = codeBlock`
+        dependencies:
+          apm:
+            - owner/repo#v1.0.0
+            - git: https://github.com/other/repo.git
+              ref: main
+            - path: ./local
+      `;
+      const deps = extractPackageFile(content, packageFile)?.deps;
+      expect(deps).toHaveLength(3);
+      expect(deps?.map((dep) => dep.skipReason)).toEqual([
+        undefined,
+        'unsupported',
+        'local-dependency',
       ]);
     });
   });
