@@ -1,5 +1,6 @@
 import { codeBlock } from 'common-tags';
 import { describe, expect, it } from 'vitest';
+import { regEx } from '../../../util/regex.ts';
 import { GitTagsDatasource } from '../../datasource/git-tags/index.ts';
 import { GithubTagsDatasource } from '../../datasource/github-tags/index.ts';
 import { GitlabTagsDatasource } from '../../datasource/gitlab-tags/index.ts';
@@ -388,6 +389,151 @@ describe('modules/manager/apm/extract', () => {
             '{{depName}}#{{#if newDigest}}{{newDigest}} # {{newValue}}{{else}}{{newValue}}{{/if}}',
         },
       ]);
+    });
+
+    describe('semver range refs', () => {
+      it('keeps a range ref as a range with npm versioning', () => {
+        const content = codeBlock`
+          dependencies:
+            apm:
+              - owner/repo#^1.2.0
+        `;
+        expect(extractPackageFile(content, packageFile)?.deps).toEqual([
+          {
+            depName: 'owner/repo',
+            depType: 'apm',
+            currentValue: '^1.2.0',
+            datasource: GithubTagsDatasource.id,
+            packageName: 'owner/repo',
+            replaceString: 'owner/repo#^1.2.0',
+            autoReplaceStringTemplate:
+              '{{depName}}#{{#if newDigest}}{{newDigest}} # {{newValue}}{{else}}{{newValue}}{{/if}}',
+            versioning: 'npm',
+            extractVersion: expect.any(String),
+          },
+        ]);
+      });
+
+      it.each`
+        ref
+        ${'^1.2.0'}
+        ${'~1.4.0'}
+        ${'1.2.x'}
+        ${'1.2.*'}
+        ${'1.2.3'}
+        ${'=1.2.3'}
+        ${'>1.2.3'}
+        ${'<=2.0.0'}
+        ${'>=1.0.0 <2.0.0'}
+        ${'^1.2.0-rc.1'}
+        ${'1.2.3+build.5'}
+      `('keeps $ref as a range', ({ ref }) => {
+        const content = codeBlock`
+          dependencies:
+            apm:
+              - owner/repo#${ref}
+        `;
+        expect(extractPackageFile(content, packageFile)?.deps).toMatchObject([
+          {
+            currentValue: ref,
+            replaceString: `owner/repo#${ref}`,
+            versioning: 'npm',
+          },
+        ]);
+      });
+
+      it.each`
+        entry                                           | tag                   | version
+        ${'owner/repo#^1.2.0'}                          | ${'v1.2.0'}           | ${'1.2.0'}
+        ${'owner/repo#^1.2.0'}                          | ${'repo--v1.3.0'}     | ${'1.3.0'}
+        ${'owner/repo#^1.2.0'}                          | ${'repo-v1.4.0'}      | ${'1.4.0'}
+        ${'owner/repo#^1.2.0'}                          | ${'1.5.0'}            | ${'1.5.0'}
+        ${'owner/repo#^1.2.0'}                          | ${'v2.0.0-rc.1'}      | ${'2.0.0-rc.1'}
+        ${'owner/repo#^1.2.0'}                          | ${'other--v9.0.0'}    | ${undefined}
+        ${'owner/repo#^1.2.0'}                          | ${'v1.2'}             | ${undefined}
+        ${'owner/repo#^1.2.0'}                          | ${'latest'}           | ${undefined}
+        ${'owner/repo/plugins/foo#^1.2.0'}              | ${'foo--v1.2.0'}      | ${'1.2.0'}
+        ${'owner/repo/plugins/foo#^1.2.0'}              | ${'foo-v1.2.0'}       | ${'1.2.0'}
+        ${'owner/repo/plugins/foo#^1.2.0'}              | ${'v1.2.0'}           | ${'1.2.0'}
+        ${'owner/repo/plugins/foo#^1.2.0'}              | ${'bar--v1.2.0'}      | ${undefined}
+        ${'owner/repo/plugins/foo#^1.2.0'}              | ${'repo--v1.2.0'}     | ${undefined}
+        ${'owner/repo/skills/my.skill#^1.0.0'}          | ${'my.skill--v1.0.0'} | ${'1.0.0'}
+        ${'owner/repo/skills/my.skill#^1.0.0'}          | ${'myXskill--v1.0.0'} | ${undefined}
+        ${'owner/repo/prompts/review.prompt.md#^1.0.0'} | ${'repo--v1.0.0'}     | ${'1.0.0'}
+        ${'gitlab.com/group/sub/project#^1.0.0'}        | ${'project--v1.0.0'}  | ${'1.0.0'}
+      `(
+        'reads tag $tag as version $version for $entry',
+        ({ entry, tag, version }) => {
+          const content = codeBlock`
+            dependencies:
+              apm:
+                - ${entry}
+          `;
+          const [dep] = extractPackageFile(content, packageFile)!.deps;
+          expect(regEx(dep.extractVersion!).exec(tag)?.groups?.version).toBe(
+            version,
+          );
+        },
+      );
+
+      it.each`
+        ref
+        ${'~1.4'}
+        ${'>=2.0 <3'}
+        ${'^1.2'}
+        ${'>=1.0.0 <2'}
+        ${'>= 1.0.0'}
+        ${'==1.2.3'}
+      `('skips $ref, which APM rejects', ({ ref }) => {
+        const content = codeBlock`
+          dependencies:
+            apm:
+              - owner/repo#${ref}
+        `;
+        expect(extractPackageFile(content, packageFile)?.deps).toEqual([
+          {
+            depName: 'owner/repo',
+            depType: 'apm',
+            currentValue: ref,
+            skipReason: 'invalid-version',
+          },
+        ]);
+      });
+
+      it('skips an uppercase X wildcard', () => {
+        const content = codeBlock`
+          dependencies:
+            apm:
+              - owner/repo#1.2.X
+        `;
+        expect(extractPackageFile(content, packageFile)?.deps).toEqual([
+          {
+            depName: 'owner/repo',
+            depType: 'apm',
+            currentValue: '1.2.X',
+            skipReason: 'unsupported-version',
+          },
+        ]);
+      });
+
+      it.each`
+        ref
+        ${'v1.2.3'}
+        ${'main'}
+        ${'foo--v1.0.0'}
+        ${'1.2'}
+      `('leaves literal ref $ref unchanged', ({ ref }) => {
+        const content = codeBlock`
+          dependencies:
+            apm:
+              - owner/repo#${ref}
+        `;
+        const [dep] = extractPackageFile(content, packageFile)!.deps;
+        expect(dep).toMatchObject({ currentValue: ref });
+        expect(dep).not.toHaveProperty('versioning');
+        expect(dep).not.toHaveProperty('extractVersion');
+        expect(dep).not.toHaveProperty('skipReason');
+      });
     });
   });
 });

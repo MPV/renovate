@@ -8,6 +8,7 @@ import { parseSingleYaml } from '../../../util/yaml.ts';
 import { GitTagsDatasource } from '../../datasource/git-tags/index.ts';
 import { GithubTagsDatasource } from '../../datasource/github-tags/index.ts';
 import { GitlabTagsDatasource } from '../../datasource/gitlab-tags/index.ts';
+import * as npmVersioning from '../../versioning/npm/index.ts';
 import type { PackageDependency, PackageFileContent } from '../types.ts';
 import { ApmManifest } from './schema.ts';
 
@@ -71,6 +72,52 @@ const autoReplaceStringTemplate =
  */
 const virtualRootSegments = new Set(['prompts', 'instructions', 'collections']);
 const virtualFileRegex = regEx(/\.(?:prompt|instructions|chatmode|agent)\.md$/);
+
+/** A full `x.y.z` version, with optional prerelease and build metadata. */
+const semverPattern =
+  '\\d+\\.\\d+\\.\\d+(?:-[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?';
+
+/**
+ * One space-separated component of an APM semver range: a full version,
+ * optionally behind `>=`, `<=`, `>`, `<`, `^`, `~` or `=`, or an `x.y.x`
+ * wildcard. A bare `1.2.3` is an exact-version constraint. See
+ * `is_semver_range` in apm's `deps/registry/semver.py`.
+ */
+const rangeComponentRegex = regEx(
+  `^(?:(?:>=|<=|>|<|\\^|~|=)?${semverPattern}|\\d+\\.\\d+\\.[xX*])$`,
+);
+const rangeOperatorRegex = regEx(/^(?:>=|<=|>|<|\^|~|=)/);
+const upperWildcardRegex = regEx(/\.X(?:\s|$)/);
+
+function isApmSemverRange(ref: string): boolean {
+  return ref
+    .split(regEx(/\s+/))
+    .every((component) => rangeComponentRegex.test(component));
+}
+
+/**
+ * The `{name}` in APM's per-package tag patterns: the last segment of a virtual
+ * subdirectory, or else the repository name. See `package_name` in apm's
+ * `deps/revision_pins.py`.
+ */
+function tagPackageName(repoPath: string, subpath: string[]): string {
+  const last = subpath.at(-1);
+  if (last && !virtualFileRegex.test(last)) {
+    return last;
+  }
+  return repoPath.slice(repoPath.lastIndexOf('/') + 1);
+}
+
+/**
+ * Keeps only the tags APM resolves a semver ref against, and reads the version
+ * from them: `v<version>`, `<name>--v<version>` and `<name>-v<version>`
+ * (`DEFAULT_TAG_PATTERNS` in apm's `deps/git_semver_resolver.py`), plus its
+ * bare `<version>` fallback.
+ */
+function rangeExtractVersion(name: string): string {
+  const escapedName = RegExp.escape(name);
+  return `^(?:v|${escapedName}--v|${escapedName}-v)?(?<version>${semverPattern})$`;
+}
 
 /**
  * Resolve the repository path from the host-stripped path segments.
@@ -187,10 +234,8 @@ export function parseApmDependency(
   const hasHost = (segments[0] ?? '').includes('.');
   const host = hasHost ? segments[0] : 'github.com';
   const platform = detectPlatform(`https://${host}`);
-  const repoPath = resolveRepoPath(
-    platform,
-    hasHost ? segments.slice(1) : segments,
-  );
+  const pathSegments = hasHost ? segments.slice(1) : segments;
+  const repoPath = resolveRepoPath(platform, pathSegments);
 
   if (!repoPath) {
     logger.debug({ entry }, 'apm: could not determine owner/repo');
@@ -230,6 +275,30 @@ export function parseApmDependency(
       currentDigest: ref,
       replaceString: tail.replaceString,
     };
+  }
+
+  if (isApmSemverRange(ref)) {
+    if (upperWildcardRegex.test(ref)) {
+      // `npm` versioning rewrites `1.2.X` as `1.5`, which APM would read as a
+      // literal ref rather than a range.
+      return { ...base, currentValue: ref, skipReason: 'unsupported-version' };
+    }
+    // APM resolves a semver ref against the repository's tags rather than
+    // treating it as a literal tag, so keep it a range.
+    const subpath = pathSegments.slice(repoPath.split('/').length);
+    return {
+      ...dep,
+      currentValue: ref,
+      replaceString: entry,
+      versioning: npmVersioning.id,
+      extractVersion: rangeExtractVersion(tagPackageName(repoPath, subpath)),
+    };
+  }
+
+  if (rangeOperatorRegex.test(ref)) {
+    // APM rejects a ref that starts like a range but isn't a valid one (such
+    // as `~1.4`, which lacks a patch version), so it can't be installed as is.
+    return { ...base, currentValue: ref, skipReason: 'invalid-version' };
   }
 
   return {
