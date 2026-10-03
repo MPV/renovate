@@ -178,6 +178,12 @@ function parseUrlLocation(url: string): RepoLocation | null {
   };
 }
 
+function parseLocation(location: string): RepoLocation | null {
+  return gitUrlRegex.test(location)
+    ? parseUrlLocation(location)
+    : parseShorthandLocation(location);
+}
+
 interface PinnedTail {
   replaceString: string;
   currentValue: string;
@@ -227,6 +233,75 @@ function createPinnedTailFinder(
   };
 }
 
+interface RefLine {
+  quote: string;
+  value: string;
+  /** The whitespace and comment after the value, if any. */
+  tail: string;
+}
+
+/** A `ref:` key of an object entry, possibly the entry's first key. */
+const refLineRegex = regEx(/^\s*(?:-\s+)?ref:\s+(?<rest>\S.*)$/);
+const commentStartRegex = regEx(/\s#/);
+/**
+ * The tag in the comment after a SHA-pinned ref is the comment's first word, so
+ * a note after it (`# v2.0.0 # reviewed`) is kept rather than read as the tag.
+ */
+const refTagCommentRegex = regEx(/^(?<comment>\s+#\s*(?<tag>\S+))/);
+
+/**
+ * Splits a YAML value into its unquoted text and the comment after it. A quoted
+ * value that continues on the next line yields text that matches no ref.
+ */
+function parseRefLine(rest: string): RefLine {
+  const quote = rest.startsWith('"') || rest.startsWith("'") ? rest[0] : '';
+  if (quote) {
+    const end = rest.indexOf(quote, 1);
+    return { quote, value: rest.slice(1, end), tail: rest.slice(end + 1) };
+  }
+  const commentIndex = rest.search(commentStartRegex);
+  const end = commentIndex === -1 ? rest.length : commentIndex;
+  return { quote, value: rest.slice(0, end), tail: rest.slice(end) };
+}
+
+/**
+ * The object form keeps its ref on its own `ref:` line, which the structured
+ * parse reduces to a plain value. Returns a matcher that finds that line in
+ * the raw manifest, so the update can keep its quotes, and a SHA pin's tag can
+ * be recovered from the comment after it (`ref: <sha> # v2.0.0`). Like
+ * `createPinnedTailFinder`, each line is consumed at most once, in file order.
+ */
+function createRefLineFinder(
+  content: string,
+): (value: string) => RefLine | undefined {
+  const lines = content.split(newlineRegex);
+  const consumed = new Set<number>();
+  return (value) => {
+    for (let i = 0; i < lines.length; i++) {
+      if (consumed.has(i)) {
+        continue;
+      }
+      const rest = refLineRegex.exec(lines[i])?.groups?.rest;
+      const refLine = rest ? parseRefLine(rest.trimEnd()) : undefined;
+      if (refLine?.value !== value) {
+        continue;
+      }
+      consumed.add(i);
+      return refLine;
+    }
+    return undefined;
+  };
+}
+
+/**
+ * Renders a `ref:` value as either `<tag>` or the digest-pinned
+ * `<sha> # <tag>`, keeping the value's quotes around the ref but not the
+ * comment.
+ */
+function refReplaceTemplate(quote: string): string {
+  return `${quote}{{#if newDigest}}{{newDigest}}${quote} # {{newValue}}{{else}}{{newValue}}${quote}{{/if}}`;
+}
+
 /**
  * Parse a single APM dependency string: the shorthand
  * `[host/]owner/repo[/subpath...][#<ref>]`, or a clone URL with an optional
@@ -262,9 +337,7 @@ export function parseApmDependency(
     return { ...base, skipReason: 'unspecified-version' };
   }
 
-  const location = gitUrlRegex.test(pathPart)
-    ? parseUrlLocation(pathPart)
-    : parseShorthandLocation(pathPart);
+  const location = parseLocation(pathPart);
 
   if (!location) {
     logger.debug({ entry }, 'apm: could not determine owner/repo');
@@ -313,17 +386,86 @@ export function parseApmDependency(
 }
 
 /**
+ * Parse a git object entry, whose `git` value takes any of the string forms
+ * (without a ref) and whose ref is on its own `ref:` line. The update rewrites
+ * only that line's value, so the entry's other keys are left alone. A `path`
+ * beside `git` is a subdirectory of the repository.
+ */
+function parseGitObjectDependency(
+  git: string,
+  { ref, type }: ApmObjectDependency,
+  depType: string,
+  findRefLine: (value: string) => RefLine | undefined,
+): PackageDependency {
+  const base: PackageDependency = { depName: git, depType };
+
+  if (!ref) {
+    return { ...base, skipReason: 'unspecified-version' };
+  }
+
+  const location = parseLocation(git);
+  if (!location) {
+    logger.debug({ git }, 'apm: could not determine owner/repo');
+    return {
+      ...base,
+      currentValue: ref,
+      skipReason: 'invalid-dependency-specification',
+    };
+  }
+  if (type === 'gitlab') {
+    // Marks a self-managed GitLab whose hostname doesn't say so.
+    location.platform = 'gitlab';
+  }
+
+  const refLine = findRefLine(ref);
+  if (!refLine) {
+    // Not a block-style `ref:` line (such as a flow mapping), so there is no
+    // single value to rewrite.
+    logger.debug({ git, ref }, 'apm: could not find the ref line');
+    return { ...base, currentValue: ref, skipReason: 'unsupported' };
+  }
+
+  const dep: PackageDependency = {
+    ...base,
+    ...determineDatasource(location),
+    autoReplaceStringTemplate: refReplaceTemplate(refLine.quote),
+  };
+  const quotedRef = `${refLine.quote}${ref}${refLine.quote}`;
+
+  if (isLongCommitSha(ref)) {
+    const tagComment = refTagCommentRegex.exec(refLine.tail)?.groups;
+    if (!tagComment) {
+      // Bare SHA with no tag comment - no version to track.
+      return {
+        ...base,
+        currentDigest: ref,
+        skipReason: 'unversioned-reference',
+      };
+    }
+    return {
+      ...dep,
+      currentValue: tagComment.tag,
+      currentDigest: ref,
+      replaceString: `${quotedRef}${tagComment.comment}`,
+    };
+  }
+
+  return { ...dep, currentValue: ref, replaceString: quotedRef };
+}
+
+/**
  * Parse the object form of an APM dependency entry.
  *
  * The source is a git repository (`git`), a marketplace plugin (`marketplace`),
  * a registry package (`id`/`registry`) or a local directory (`path` without
- * `git`). None of them is updatable yet, but each is reported with a
+ * `git`). Only git entries map to a datasource; the others are reported with a
  * `skipReason` rather than dropped, so an unsupported entry is visibly
  * unsupported instead of looking up to date.
  */
 export function parseApmObjectDependency(
   entry: ApmObjectDependency,
   depType: string,
+  findRefLine: (value: string) => RefLine | undefined,
 ): PackageDependency {
   if (entry.git === 'parent') {
     // A sibling in the repository of the package declaring it, installed at
@@ -332,15 +474,7 @@ export function parseApmObjectDependency(
   }
 
   if (entry.git) {
-    // Git-backed, so updatable in principle, but the clone URL needs its own
-    // parsing before it maps to a datasource. A `path` beside `git` is a
-    // subdirectory of the repository.
-    return {
-      depName: entry.git,
-      depType,
-      ...(entry.ref ? { currentValue: entry.ref } : {}),
-      skipReason: 'unsupported',
-    };
+    return parseGitObjectDependency(entry.git, entry, depType, findRefLine);
   }
 
   if (entry.marketplace) {
@@ -374,15 +508,20 @@ export function parseApmObjectDependency(
   return { depType, skipReason: 'invalid-dependency-specification' };
 }
 
+interface LineFinders {
+  findPinnedTail: (value: string) => PinnedTail | undefined;
+  findRefLine: (value: string) => RefLine | undefined;
+}
+
 function extractSection(
   entries: ApmDependencyEntry[] | undefined,
   depType: string,
-  findPinnedTail: (value: string) => PinnedTail | undefined,
+  { findPinnedTail, findRefLine }: LineFinders,
 ): PackageDependency[] {
   return coerceArray(entries).map((entry) =>
     isString(entry)
       ? parseApmDependency(entry, depType, findPinnedTail)
-      : parseApmObjectDependency(entry, depType),
+      : parseApmObjectDependency(entry, depType, findRefLine),
   );
 }
 
@@ -398,10 +537,13 @@ export function extractPackageFile(
     return null;
   }
 
-  const findPinnedTail = createPinnedTailFinder(content);
+  const finders: LineFinders = {
+    findPinnedTail: createPinnedTailFinder(content),
+    findRefLine: createRefLineFinder(content),
+  };
   const deps = [
-    ...extractSection(manifest.dependencies?.apm, 'apm', findPinnedTail),
-    ...extractSection(manifest.devDependencies?.apm, 'apm-dev', findPinnedTail),
+    ...extractSection(manifest.dependencies?.apm, 'apm', finders),
+    ...extractSection(manifest.devDependencies?.apm, 'apm-dev', finders),
   ];
 
   if (!deps.length) {

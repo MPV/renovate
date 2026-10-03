@@ -440,12 +440,12 @@ describe('modules/manager/apm/extract', () => {
       ]);
     });
 
-    it('reports a git entry with its ref, pending support', () => {
+    it('extracts a git entry with its ref', () => {
       const content = codeBlock`
         dependencies:
           apm:
             - git: https://github.com/github/awesome-copilot.git
-              ref: main
+              ref: v1.2.0
               skills:
                 - conventional-commit
               alias: github-awesome-copilot
@@ -454,8 +454,12 @@ describe('modules/manager/apm/extract', () => {
         {
           depName: 'https://github.com/github/awesome-copilot.git',
           depType: 'apm',
-          currentValue: 'main',
-          skipReason: 'unsupported',
+          currentValue: 'v1.2.0',
+          datasource: GithubTagsDatasource.id,
+          packageName: 'github/awesome-copilot',
+          replaceString: 'v1.2.0',
+          autoReplaceStringTemplate:
+            '{{#if newDigest}}{{newDigest}} # {{newValue}}{{else}}{{newValue}}{{/if}}',
         },
       ]);
     });
@@ -468,12 +472,12 @@ describe('modules/manager/apm/extract', () => {
               ref: main
               path: modifiers/ordering-modifier-chains
       `;
-      expect(extractPackageFile(content, packageFile)?.deps).toEqual([
+      expect(extractPackageFile(content, packageFile)?.deps).toMatchObject([
         {
           depName: 'https://github.com/skydoves/compose-performance-skills.git',
-          depType: 'apm',
           currentValue: 'main',
-          skipReason: 'unsupported',
+          datasource: GithubTagsDatasource.id,
+          packageName: 'skydoves/compose-performance-skills',
         },
       ]);
     });
@@ -519,7 +523,7 @@ describe('modules/manager/apm/extract', () => {
       ]);
     });
 
-    it('reports a git entry with no ref', () => {
+    it('skips a git entry with no ref', () => {
       const content = codeBlock`
         devDependencies:
           apm:
@@ -529,7 +533,7 @@ describe('modules/manager/apm/extract', () => {
         {
           depName: 'https://github.com/owner/repo.git',
           depType: 'apm-dev',
-          skipReason: 'unsupported',
+          skipReason: 'unspecified-version',
         },
       ]);
     });
@@ -547,7 +551,7 @@ describe('modules/manager/apm/extract', () => {
       expect(deps).toHaveLength(3);
       expect(deps?.map((dep) => dep.skipReason)).toEqual([
         undefined,
-        'unsupported',
+        undefined,
         'local-dependency',
       ]);
     });
@@ -672,6 +676,183 @@ describe('modules/manager/apm/extract', () => {
       expect(extractPackageFile(content, packageFile)?.deps).toEqual([
         {
           depName: entry.slice(0, entry.indexOf('#')),
+          depType: 'apm',
+          currentValue: 'v1.0.0',
+          skipReason: 'invalid-dependency-specification',
+        },
+      ]);
+    });
+  });
+
+  describe('git object entries', () => {
+    const template =
+      '{{#if newDigest}}{{newDigest}} # {{newValue}}{{else}}{{newValue}}{{/if}}';
+    const sha = '2d202c722c1815007619ee0b667401b9d42e456e';
+
+    it.each`
+      git                                              | datasource                 | packageName
+      ${'owner/repo'}                                  | ${GithubTagsDatasource.id} | ${'owner/repo'}
+      ${'gitlab.com/group/sub/repo'}                   | ${GitlabTagsDatasource.id} | ${'group/sub/repo'}
+      ${'git@gitlab.com:group/sub/repo.git'}           | ${GitlabTagsDatasource.id} | ${'group/sub/repo'}
+      ${'ssh://git@bitbucket.corp:7999/proj/repo.git'} | ${GitTagsDatasource.id}    | ${'ssh://git@bitbucket.corp:7999/proj/repo.git'}
+    `(
+      'looks up git: $git with $datasource',
+      ({ git, datasource, packageName }) => {
+        const content = codeBlock`
+        dependencies:
+          apm:
+            - git: ${git}
+              ref: v1.0.0
+      `;
+        expect(extractPackageFile(content, packageFile)?.deps).toEqual([
+          {
+            depName: git,
+            depType: 'apm',
+            currentValue: 'v1.0.0',
+            datasource,
+            packageName,
+            replaceString: 'v1.0.0',
+            autoReplaceStringTemplate: template,
+          },
+        ]);
+      },
+    );
+
+    it('looks up a self-managed GitLab marked with type: gitlab', () => {
+      const content = codeBlock`
+        dependencies:
+          apm:
+            - git: https://code.acme.com/platform/standards.git
+              type: gitlab
+              ref: v1.0.0
+      `;
+      expect(extractPackageFile(content, packageFile)?.deps).toMatchObject([
+        {
+          datasource: GitlabTagsDatasource.id,
+          packageName: 'platform/standards',
+          registryUrls: ['https://code.acme.com'],
+        },
+      ]);
+    });
+
+    it.each`
+      line                        | ref                 | replaceString         | quote
+      ${'ref: ">=1.0.0 <2.0.0"'}  | ${'>=1.0.0 <2.0.0'} | ${'">=1.0.0 <2.0.0"'} | ${'"'}
+      ${"ref: 'v1.0.0' # pinned"} | ${'v1.0.0'}         | ${"'v1.0.0'"}         | ${"'"}
+      ${'ref: v1.0.0 # pinned'}   | ${'v1.0.0'}         | ${'v1.0.0'}           | ${''}
+    `('keeps the quotes of $line', ({ line, ref, replaceString, quote }) => {
+      const content = codeBlock`
+        dependencies:
+          apm:
+            - git: owner/repo
+              ${line}
+      `;
+      expect(extractPackageFile(content, packageFile)?.deps).toMatchObject([
+        {
+          currentValue: ref,
+          replaceString,
+          autoReplaceStringTemplate: `${quote}{{#if newDigest}}{{newDigest}}${quote} # {{newValue}}{{else}}{{newValue}}${quote}{{/if}}`,
+        },
+      ]);
+    });
+
+    it('recovers the tag of a SHA pin from the comment after it', () => {
+      const content = codeBlock`
+        dependencies:
+          apm:
+            - git: https://github.com/chrisbanes/skills.git
+              ref: ${sha} #2026.8.27
+              skills:
+                - compose
+      `;
+      expect(extractPackageFile(content, packageFile)?.deps).toEqual([
+        {
+          depName: 'https://github.com/chrisbanes/skills.git',
+          depType: 'apm',
+          currentValue: '2026.8.27',
+          currentDigest: sha,
+          datasource: GithubTagsDatasource.id,
+          packageName: 'chrisbanes/skills',
+          replaceString: `${sha} #2026.8.27`,
+          autoReplaceStringTemplate: template,
+        },
+      ]);
+    });
+
+    it('recovers the tag of a quoted SHA pin', () => {
+      const content = codeBlock`
+        dependencies:
+          apm:
+            - git: owner/repo
+              ref: "${sha}" # v1.0.0
+      `;
+      expect(extractPackageFile(content, packageFile)?.deps).toMatchObject([
+        {
+          currentValue: 'v1.0.0',
+          currentDigest: sha,
+          replaceString: `"${sha}" # v1.0.0`,
+        },
+      ]);
+    });
+
+    it('skips a SHA pin with no tag comment', () => {
+      const content = codeBlock`
+        dependencies:
+          apm:
+            - git: owner/repo
+              ref: ${sha}
+      `;
+      expect(extractPackageFile(content, packageFile)?.deps).toEqual([
+        {
+          depName: 'owner/repo',
+          depType: 'apm',
+          currentDigest: sha,
+          skipReason: 'unversioned-reference',
+        },
+      ]);
+    });
+
+    it('maps entries with the same ref to a line each, in order', () => {
+      const content = codeBlock`
+        dependencies:
+          apm:
+            - ref: main
+              git: owner/first
+            - git: owner/second
+              ref: main
+      `;
+      expect(extractPackageFile(content, packageFile)?.deps).toMatchObject([
+        { packageName: 'owner/first', currentValue: 'main' },
+        { packageName: 'owner/second', currentValue: 'main' },
+      ]);
+    });
+
+    it('skips a ref it cannot find on its own line', () => {
+      const content = codeBlock`
+        dependencies:
+          apm:
+            - { git: owner/repo, ref: v1.0.0 }
+      `;
+      expect(extractPackageFile(content, packageFile)?.deps).toEqual([
+        {
+          depName: 'owner/repo',
+          depType: 'apm',
+          currentValue: 'v1.0.0',
+          skipReason: 'unsupported',
+        },
+      ]);
+    });
+
+    it('marks a git value without owner/repo as invalid', () => {
+      const content = codeBlock`
+        dependencies:
+          apm:
+            - git: foo
+              ref: v1.0.0
+      `;
+      expect(extractPackageFile(content, packageFile)?.deps).toEqual([
+        {
+          depName: 'foo',
           depType: 'apm',
           currentValue: 'v1.0.0',
           skipReason: 'invalid-dependency-specification',

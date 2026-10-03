@@ -49,12 +49,16 @@ dependencies:
     - path: ./local/skills
 ```
 
-Renovate reports these entries but does not update them yet, so each is listed with a skip reason:
+Renovate updates `git` entries by rewriting the value of their `ref:` line, and leaves the entry's other keys alone.
+The `git` value can take any of the forms above without a `#<ref>`, and `type: gitlab` marks a self-managed GitLab whose hostname doesn't say so.
+A SHA-pinned `ref:` with the tag in a comment after it (`ref: <sha> # v2.0.0`) is updated as a digest, the same as the string form.
+Renovate keeps the quotes around a quoted `ref:` value, and skips a `ref:` it can't find on its own line, such as in a flow mapping (`{ git: ..., ref: ... }`).
 
-| Entry                  | Skip reason              | Why                                                                                            |
-| ---------------------- | ------------------------ | ---------------------------------------------------------------------------------------------- |
-| `git`                  | `unsupported`            | updatable in principle, but the clone URL needs its own parsing before it maps to a datasource |
-| `git: parent`          | `inherited-dependency`   | a sibling in the declaring package's own repository, installed at that package's ref           |
-| `marketplace`          | `unknown-registry`       | marketplaces are registered with the APM CLI, so the repository doesn't say where it points    |
-| `id`, `registry`       | `unsupported-datasource` | resolved through APM's registry, for which Renovate has no datasource                          |
-| `path` (without `git`) | `local-dependency`       | a local dependency has no upstream to track                                                    |
+The other entries are listed with a skip reason:
+
+| Entry                  | Skip reason              | Why                                                                                         |
+| ---------------------- | ------------------------ | ------------------------------------------------------------------------------------------- |
+| `git: parent`          | `inherited-dependency`   | a sibling in the declaring package's own repository, installed at that package's ref        |
+| `marketplace`          | `unknown-registry`       | marketplaces are registered with the APM CLI, so the repository doesn't say where it points |
+| `id`, `registry`       | `unsupported-datasource` | resolved through APM's registry, for which Renovate has no datasource                       |
+| `path` (without `git`) | `local-dependency`       | a local dependency has no upstream to track                                                 |

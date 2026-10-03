@@ -4,8 +4,9 @@ import { LooseArray } from '../../../util/schema-utils/index.ts';
 /**
  * The object form of an APM dependency entry.
  *
- * The source is a git repository (`git`, with `path` naming a subdirectory and
- * `ref` pinning it), a local directory (`path` without `git`), a marketplace
+ * The source is a git repository (`git`, with `path` naming a subdirectory,
+ * `ref` pinning it and `type: gitlab` marking a self-managed GitLab host), a
+ * local directory (`path` without `git`), a marketplace
  * plugin (`name` + `marketplace`, pinned by `version`), or a registry package
  * (`id`/`registry`, experimental). Keys that don't identify the source, such as
  * `alias` or `skills`, are not parsed here.
@@ -18,6 +19,7 @@ export const ApmObjectDependency = z.object({
   path: z.string().optional(),
   registry: z.string().optional(),
   ref: z.string().optional(),
+  type: z.string().optional(),
   version: z.string().optional(),
 });
 
