@@ -460,6 +460,65 @@ describe('modules/manager/apm/extract', () => {
       ]);
     });
 
+    it('treats path beside git as a subpath, not a local dependency', () => {
+      const content = codeBlock`
+        dependencies:
+          apm:
+            - git: https://github.com/skydoves/compose-performance-skills.git
+              ref: main
+              path: modifiers/ordering-modifier-chains
+      `;
+      expect(extractPackageFile(content, packageFile)?.deps).toEqual([
+        {
+          depName: 'https://github.com/skydoves/compose-performance-skills.git',
+          depType: 'apm',
+          currentValue: 'main',
+          skipReason: 'unsupported',
+        },
+      ]);
+    });
+
+    it('reports a sibling in the parent repository as inherited', () => {
+      const content = codeBlock`
+        dependencies:
+          apm:
+            - git: parent
+              path: skills/shared
+      `;
+      expect(extractPackageFile(content, packageFile)?.deps).toEqual([
+        {
+          depName: 'skills/shared',
+          depType: 'apm',
+          skipReason: 'inherited-dependency',
+        },
+      ]);
+    });
+
+    it('reports a marketplace plugin as coming from an unknown registry', () => {
+      const content = codeBlock`
+        dependencies:
+          apm:
+            - name: secrets-vault
+              marketplace: acme-plugins
+              version: "~2.1.0"
+            - name: sec-check
+              marketplace: acme-plugins
+      `;
+      expect(extractPackageFile(content, packageFile)?.deps).toEqual([
+        {
+          depName: 'secrets-vault@acme-plugins',
+          depType: 'apm',
+          currentValue: '~2.1.0',
+          skipReason: 'unknown-registry',
+        },
+        {
+          depName: 'sec-check@acme-plugins',
+          depType: 'apm',
+          skipReason: 'unknown-registry',
+        },
+      ]);
+    });
+
     it('reports a git entry with no ref', () => {
       const content = codeBlock`
         devDependencies:

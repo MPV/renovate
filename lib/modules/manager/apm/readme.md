@@ -22,17 +22,22 @@ APM also documents pinning to a commit SHA with the release tag kept as a traili
 With `pinDigests` enabled (part of the `config:best-practices` preset) Renovate keeps both the SHA and the tag comment current, the same way it does for `github-actions` (`uses: owner/action@<sha> # v4`).
 A SHA pin without a tag comment is skipped, as there is no version to track.
 
-## Object form entries
+When an `apm.lock.yaml` lockfile is present, Renovate refreshes it by running `apm install` after updating the manifest.
+This requires the `apm` CLI to be available (for example, with `binarySource=global`).
 
-APM also accepts an object form, where the source is given by one of `git`, `id`, `path` or `registry`:
+### Object form entries
+
+APM also accepts an object form, where the source is a git repository (`git`), a marketplace plugin (`marketplace`), a registry package (`id` or `registry`), or a local directory (`path` without `git`):
 
 ```yaml
 dependencies:
   apm:
     - git: https://github.com/owner/repo.git
+      path: skills/some-skill
       ref: main
-      skills:
-        - some-skill
+    - name: some-plugin
+      marketplace: some-marketplace
+      version: ~2.1.0
     - id: some-registry-package
       version: 1.2.3
     - path: ./local/skills
@@ -40,11 +45,10 @@ dependencies:
 
 Renovate reports these entries but does not update them yet, so each is listed with a skip reason:
 
-| Entry            | Skip reason              | Why                                                                                           |
-| ---------------- | ------------------------ | --------------------------------------------------------------------------------------------- |
-| `git`            | `unsupported`            | updatable in principle, but the ref lives on its own key and needs a separate write-back path |
-| `id`, `registry` | `unsupported-datasource` | resolved through APM's registry, for which Renovate has no datasource                         |
-| `path`           | `local-dependency`       | a local dependency has no upstream to track                                                   |
-
-When an `apm.lock.yaml` lockfile is present, Renovate refreshes it by running `apm install` after updating the manifest.
-This requires the `apm` CLI to be available (for example, with `binarySource=global`).
+| Entry                  | Skip reason              | Why                                                                                           |
+| ---------------------- | ------------------------ | --------------------------------------------------------------------------------------------- |
+| `git`                  | `unsupported`            | updatable in principle, but the ref lives on its own key and needs a separate write-back path |
+| `git: parent`          | `inherited-dependency`   | a sibling in the declaring package's own repository, installed at that package's ref          |
+| `marketplace`          | `unknown-registry`       | marketplaces are registered with the APM CLI, so the repository doesn't say where it points   |
+| `id`, `registry`       | `unsupported-datasource` | resolved through APM's registry, for which Renovate has no datasource                         |
+| `path` (without `git`) | `local-dependency`       | a local dependency has no upstream to track                                                   |

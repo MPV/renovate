@@ -4,14 +4,17 @@ import { LooseArray } from '../../../util/schema-utils/index.ts';
 /**
  * The object form of an APM dependency entry.
  *
- * APM's manifest schema requires exactly one of `git`, `id`, `path` or
- * `registry` as the source discriminator, and allows `ref`/`version` to pin it.
- * `alias`, `skills` and `prerelease` are also permitted but do not identify the
- * source, so they are not parsed here.
+ * The source is a git repository (`git`, with `path` naming a subdirectory and
+ * `ref` pinning it), a local directory (`path` without `git`), a marketplace
+ * plugin (`name` + `marketplace`, pinned by `version`), or a registry package
+ * (`id`/`registry`, experimental). Keys that don't identify the source, such as
+ * `alias` or `skills`, are not parsed here.
  */
 export const ApmObjectDependency = z.object({
   git: z.string().optional(),
   id: z.string().optional(),
+  marketplace: z.string().optional(),
+  name: z.string().optional(),
   path: z.string().optional(),
   registry: z.string().optional(),
   ref: z.string().optional(),

@@ -243,24 +243,48 @@ export function parseApmDependency(
 /**
  * Parse the object form of an APM dependency entry.
  *
- * Exactly one of `git`, `id`, `path` or `registry` identifies the source. None
- * of them is updatable yet, but each is reported with a `skipReason` rather
- * than dropped, so an unsupported entry is visibly unsupported instead of
- * looking up to date.
+ * The source is a git repository (`git`), a marketplace plugin (`marketplace`),
+ * a registry package (`id`/`registry`) or a local directory (`path` without
+ * `git`). None of them is updatable yet, but each is reported with a
+ * `skipReason` rather than dropped, so an unsupported entry is visibly
+ * unsupported instead of looking up to date.
  */
 export function parseApmObjectDependency(
   entry: ApmObjectDependency,
   depType: string,
 ): PackageDependency {
-  if (entry.path) {
-    // A local dependency has no upstream to track.
-    return { depName: entry.path, depType, skipReason: 'local-dependency' };
+  if (entry.git === 'parent') {
+    // A sibling in the repository of the package declaring it, installed at
+    // that package's own ref.
+    return { depName: entry.path, depType, skipReason: 'inherited-dependency' };
+  }
+
+  if (entry.git) {
+    // Git-backed, so updatable in principle - but the ref lives on its own key
+    // rather than in the entry string, which needs a separate write-back path.
+    // A `path` beside `git` is a subdirectory of the repository.
+    return {
+      depName: entry.git,
+      depType,
+      ...(entry.ref ? { currentValue: entry.ref } : {}),
+      skipReason: 'unsupported',
+    };
+  }
+
+  if (entry.marketplace) {
+    // Resolved through a marketplace registered with the APM CLI on the
+    // installing machine, which the repository doesn't identify.
+    return {
+      depName: `${entry.name}@${entry.marketplace}`,
+      depType,
+      ...(entry.version ? { currentValue: entry.version } : {}),
+      skipReason: 'unknown-registry',
+    };
   }
 
   const registryPackage = entry.id ?? entry.registry;
   if (registryPackage) {
-    // Resolved through APM's registry/marketplace, for which Renovate has no
-    // datasource.
+    // Resolved through APM's registry, for which Renovate has no datasource.
     return {
       depName: registryPackage,
       depType,
@@ -269,15 +293,9 @@ export function parseApmObjectDependency(
     };
   }
 
-  if (entry.git) {
-    // Git-backed, so updatable in principle - but the ref lives on its own key
-    // rather than in the entry string, which needs a separate write-back path.
-    return {
-      depName: entry.git,
-      depType,
-      ...(entry.ref ? { currentValue: entry.ref } : {}),
-      skipReason: 'unsupported',
-    };
+  if (entry.path) {
+    // A local dependency has no upstream to track.
+    return { depName: entry.path, depType, skipReason: 'local-dependency' };
   }
 
   logger.debug({ entry }, 'apm: object entry declares no known source');
