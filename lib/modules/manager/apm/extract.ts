@@ -260,9 +260,9 @@ export function parseApmObjectDependency(
   }
 
   if (entry.git) {
-    // Git-backed, so updatable in principle - but the ref lives on its own key
-    // rather than in the entry string, which needs a separate write-back path.
-    // A `path` beside `git` is a subdirectory of the repository.
+    // Git-backed, so updatable in principle, but the clone URL needs its own
+    // parsing before it maps to a datasource. A `path` beside `git` is a
+    // subdirectory of the repository.
     return {
       depName: entry.git,
       depType,

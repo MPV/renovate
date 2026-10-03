@@ -45,10 +45,10 @@ dependencies:
 
 Renovate reports these entries but does not update them yet, so each is listed with a skip reason:
 
-| Entry                  | Skip reason              | Why                                                                                           |
-| ---------------------- | ------------------------ | --------------------------------------------------------------------------------------------- |
-| `git`                  | `unsupported`            | updatable in principle, but the ref lives on its own key and needs a separate write-back path |
-| `git: parent`          | `inherited-dependency`   | a sibling in the declaring package's own repository, installed at that package's ref          |
-| `marketplace`          | `unknown-registry`       | marketplaces are registered with the APM CLI, so the repository doesn't say where it points   |
-| `id`, `registry`       | `unsupported-datasource` | resolved through APM's registry, for which Renovate has no datasource                         |
-| `path` (without `git`) | `local-dependency`       | a local dependency has no upstream to track                                                   |
+| Entry                  | Skip reason              | Why                                                                                            |
+| ---------------------- | ------------------------ | ---------------------------------------------------------------------------------------------- |
+| `git`                  | `unsupported`            | updatable in principle, but the clone URL needs its own parsing before it maps to a datasource |
+| `git: parent`          | `inherited-dependency`   | a sibling in the declaring package's own repository, installed at that package's ref           |
+| `marketplace`          | `unknown-registry`       | marketplaces are registered with the APM CLI, so the repository doesn't say where it points    |
+| `id`, `registry`       | `unsupported-datasource` | resolved through APM's registry, for which Renovate has no datasource                          |
+| `path` (without `git`) | `local-dependency`       | a local dependency has no upstream to track                                                    |

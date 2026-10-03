@@ -440,7 +440,7 @@ describe('modules/manager/apm/extract', () => {
       ]);
     });
 
-    it('reports a git entry with its ref, pending write-back support', () => {
+    it('reports a git entry with its ref, pending support', () => {
       const content = codeBlock`
         dependencies:
           apm:
