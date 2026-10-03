@@ -2,6 +2,7 @@ import { isString, isTruthy } from '@sindresorhus/is';
 import { logger } from '../../../logger/index.ts';
 import { coerceArray } from '../../../util/array.ts';
 import { detectPlatform } from '../../../util/common.ts';
+import { parseGitUrl } from '../../../util/git/url.ts';
 import { newlineRegex, regEx } from '../../../util/regex.ts';
 import { isLongCommitSha } from '../../../util/schema-utils/git.ts';
 import { parseSingleYaml } from '../../../util/yaml.ts';
@@ -19,22 +20,36 @@ interface DatasourceResult {
 }
 
 /**
- * Determine which Renovate datasource to use for an APM dependency, based on
- * the git host `platform` (already resolved via `detectPlatform`, which honors
- * `hostRules`). github/gitlab (and their self-hosted variants) map to the
- * `github-tags` / `gitlab-tags` datasources; every other host (Bitbucket, Azure
- * DevOps, etc.) falls back to the generic `git-tags` datasource.
+ * Where an APM dependency lives: the git host's base URL (`https://github.com`),
+ * its `platform` as resolved by `detectPlatform` (which honors `hostRules`), the
+ * repository path on that host, and the URL to list its tags from when the
+ * host has no tags API.
  */
-function determineDatasource(
-  host: string,
-  platform: string | null,
-  repoPath: string,
-): DatasourceResult {
+interface RepoLocation {
+  baseUrl: string;
+  platform: string | null;
+  repoPath: string;
+  cloneUrl: string;
+}
+
+/**
+ * Determine which Renovate datasource to use for an APM dependency, based on
+ * the git host `platform`. github/gitlab (and their self-hosted variants) map
+ * to the `github-tags` / `gitlab-tags` datasources; every other host
+ * (Bitbucket, Azure DevOps, etc.) falls back to the generic `git-tags`
+ * datasource.
+ */
+function determineDatasource({
+  baseUrl,
+  platform,
+  repoPath,
+  cloneUrl,
+}: RepoLocation): DatasourceResult {
   if (platform === 'github') {
     return {
       datasource: GithubTagsDatasource.id,
       packageName: repoPath,
-      ...(host === 'github.com' ? {} : { registryUrls: [`https://${host}`] }),
+      ...(baseUrl === 'https://github.com' ? {} : { registryUrls: [baseUrl] }),
     };
   }
 
@@ -42,13 +57,13 @@ function determineDatasource(
     return {
       datasource: GitlabTagsDatasource.id,
       packageName: repoPath,
-      ...(host === 'gitlab.com' ? {} : { registryUrls: [`https://${host}`] }),
+      ...(baseUrl === 'https://gitlab.com' ? {} : { registryUrls: [baseUrl] }),
     };
   }
 
   return {
     datasource: GitTagsDatasource.id,
-    packageName: `https://${host}/${repoPath}`,
+    packageName: cloneUrl,
   };
 }
 
@@ -59,10 +74,22 @@ const commentTagRegex = regEx(/^\s+#\s*(?<tag>\S.*?)\s*$/);
  * Renders both `owner/repo#<tag>` and the digest-pinned
  * `owner/repo#<sha> # <tag>` form, mirroring the github-actions
  * `uses: owner/action@<sha> # v4` behaviour so `pinDigests` can pin a bare tag
- * to a SHA and keep the trailing tag comment current.
+ * to a SHA and keep the trailing tag comment current. `aliasSuffix` keeps an
+ * SSH entry's `@<alias>` after the ref.
  */
-const autoReplaceStringTemplate =
-  '{{depName}}#{{#if newDigest}}{{newDigest}} # {{newValue}}{{else}}{{newValue}}{{/if}}';
+function autoReplaceTemplate(aliasSuffix = ''): string {
+  return `{{depName}}#{{#if newDigest}}{{newDigest}}${aliasSuffix} # {{newValue}}{{else}}{{newValue}}${aliasSuffix}{{/if}}`;
+}
+
+/** A clone URL: `https://`, `http://` or `ssh://`, or SCP-style `user@host:path`. */
+const gitUrlRegex = regEx(/^(?:(?:https?|ssh):\/\/|[^@/\s]+@[^:/\s]+:)/);
+const sshUrlRegex = regEx(/^(?:ssh:\/\/|[^@/\s]+@[^:/\s]+:)/);
+
+/**
+ * APM reads a trailing `@<alias>` on an SSH entry's ref as the name of the
+ * install directory (`git@host:owner/repo.git#v1.0.0@my-alias`).
+ */
+const refAliasRegex = regEx(/^(?<ref>.+)@(?<alias>[a-zA-Z0-9._-]+)$/);
 
 /**
  * APM virtual-package subpaths (skills/prompts/etc.) begin at one of these
@@ -102,6 +129,53 @@ function resolveRepoPath(
     }
   }
   return segments.slice(0, boundary).join('/');
+}
+
+/**
+ * Locate a shorthand `[host/]owner/repo[/subpath]` entry. The optional host
+ * prefix is a hostname (so it contains a dot); git host owner names never do,
+ * which disambiguates the leading segment.
+ */
+function parseShorthandLocation(pathPart: string): RepoLocation | null {
+  const segments = pathPart.split('/').filter(isTruthy);
+  const hasHost = (segments[0] ?? '').includes('.');
+  const baseUrl = `https://${hasHost ? segments[0] : 'github.com'}`;
+  const platform = detectPlatform(baseUrl);
+  const repoPath = resolveRepoPath(
+    platform,
+    hasHost ? segments.slice(1) : segments,
+  );
+  if (!repoPath) {
+    return null;
+  }
+  return { baseUrl, platform, repoPath, cloneUrl: `${baseUrl}/${repoPath}` };
+}
+
+/**
+ * Locate a clone URL entry. APM doesn't allow a subpath inside a URL, so the
+ * whole path is the repository, which also covers nested GitLab groups. Tags
+ * are listed from the URL as written, so an SSH URL keeps its transport.
+ */
+function parseUrlLocation(url: string): RepoLocation | null {
+  let parsed: ReturnType<typeof parseGitUrl>;
+  try {
+    parsed = parseGitUrl(url);
+  } catch {
+    return null;
+  }
+  const { resource, protocol, port, full_name: repoPath } = parsed;
+  if (!repoPath.includes('/')) {
+    return null;
+  }
+  // An SSH URL's port belongs to SSH, not to the host's web address.
+  const isHttp = protocol === 'http' || protocol === 'https';
+  const baseUrl = `${protocol === 'http' ? 'http' : 'https'}://${resource}${isHttp && port ? `:${port}` : ''}`;
+  return {
+    baseUrl,
+    platform: detectPlatform(baseUrl),
+    repoPath,
+    cloneUrl: url,
+  };
 }
 
 interface PinnedTail {
@@ -154,9 +228,11 @@ function createPinnedTailFinder(
 }
 
 /**
- * Parse a single APM dependency string of the form
- * `[host/]owner/repo[/subpath...][#<ref>]`, where `<ref>` is a semver tag/range,
- * a branch, or a commit SHA.
+ * Parse a single APM dependency string: the shorthand
+ * `[host/]owner/repo[/subpath...][#<ref>]`, or a clone URL with an optional
+ * `#<ref>` (`https://host/owner/repo.git`, `git@host:owner/repo.git` or
+ * `ssh://git@host/owner/repo.git`). `<ref>` is a semver tag/range, a branch, or
+ * a commit SHA.
  *
  * For a SHA-pinned entry the release tag lives in a trailing YAML comment; when
  * present it is recovered from `content` so the entry updates as a digest
@@ -170,7 +246,11 @@ export function parseApmDependency(
 ): PackageDependency {
   const hashIndex = entry.indexOf('#');
   const pathPart = hashIndex === -1 ? entry : entry.slice(0, hashIndex);
-  const ref = hashIndex === -1 ? '' : entry.slice(hashIndex + 1).trim();
+  const refPart = hashIndex === -1 ? '' : entry.slice(hashIndex + 1).trim();
+  const refAlias = sshUrlRegex.test(pathPart)
+    ? refAliasRegex.exec(refPart)?.groups
+    : undefined;
+  const ref = refAlias?.ref ?? refPart;
 
   const base: PackageDependency = {
     depName: pathPart,
@@ -182,18 +262,11 @@ export function parseApmDependency(
     return { ...base, skipReason: 'unspecified-version' };
   }
 
-  // The optional host prefix is a hostname (so it contains a dot); git host
-  // owner names never do, which disambiguates the leading segment.
-  const segments = pathPart.split('/').filter(isTruthy);
-  const hasHost = (segments[0] ?? '').includes('.');
-  const host = hasHost ? segments[0] : 'github.com';
-  const platform = detectPlatform(`https://${host}`);
-  const repoPath = resolveRepoPath(
-    platform,
-    hasHost ? segments.slice(1) : segments,
-  );
+  const location = gitUrlRegex.test(pathPart)
+    ? parseUrlLocation(pathPart)
+    : parseShorthandLocation(pathPart);
 
-  if (!repoPath) {
+  if (!location) {
     logger.debug({ entry }, 'apm: could not determine owner/repo');
     return {
       ...base,
@@ -202,17 +275,16 @@ export function parseApmDependency(
     };
   }
 
-  const { datasource, packageName, registryUrls } = determineDatasource(
-    host,
-    platform,
-    repoPath,
-  );
+  const { datasource, packageName, registryUrls } =
+    determineDatasource(location);
   const dep: PackageDependency = {
     ...base,
     datasource,
     packageName,
     ...(registryUrls ? { registryUrls } : {}),
-    autoReplaceStringTemplate,
+    autoReplaceStringTemplate: autoReplaceTemplate(
+      refAlias ? `@${refAlias.alias}` : '',
+    ),
   };
 
   if (isLongCommitSha(ref)) {
