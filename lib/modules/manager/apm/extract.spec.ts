@@ -552,4 +552,131 @@ describe('modules/manager/apm/extract', () => {
       ]);
     });
   });
+
+  describe('clone URL entries', () => {
+    const template =
+      '{{depName}}#{{#if newDigest}}{{newDigest}} # {{newValue}}{{else}}{{newValue}}{{/if}}';
+    const sha = 'b1c2d3e4f5a6b7c8d9e0f1234567890abcdef123';
+
+    it.each`
+      entry                                                       | datasource                 | packageName                                      | registryUrls
+      ${'https://github.com/owner/repo.git#v1.0.0'}               | ${GithubTagsDatasource.id} | ${'owner/repo'}                                  | ${undefined}
+      ${'https://github.com/owner/repo#v1.0.0'}                   | ${GithubTagsDatasource.id} | ${'owner/repo'}                                  | ${undefined}
+      ${'git@github.com:owner/repo.git#v1.0.0'}                   | ${GithubTagsDatasource.id} | ${'owner/repo'}                                  | ${undefined}
+      ${'ssh://git@github.com/owner/repo.git#v1.0.0'}             | ${GithubTagsDatasource.id} | ${'owner/repo'}                                  | ${undefined}
+      ${'https://gitlab.com/group/sub/repo.git#v1.0.0'}           | ${GitlabTagsDatasource.id} | ${'group/sub/repo'}                              | ${undefined}
+      ${'git@gitlab.com:group/sub/repo.git#v1.0.0'}               | ${GitlabTagsDatasource.id} | ${'group/sub/repo'}                              | ${undefined}
+      ${'https://gitlab.example.com:8443/team/repo.git#v1.0.0'}   | ${GitlabTagsDatasource.id} | ${'team/repo'}                                   | ${['https://gitlab.example.com:8443']}
+      ${'ssh://git@gitlab.example.com:2222/team/repo.git#v1.0.0'} | ${GitlabTagsDatasource.id} | ${'team/repo'}                                   | ${['https://gitlab.example.com']}
+      ${'myuser@bitbucket.org:team/repo.git#v1.0.0'}              | ${GitTagsDatasource.id}    | ${'myuser@bitbucket.org:team/repo.git'}          | ${undefined}
+      ${'ssh://git@bitbucket.corp:7999/proj/repo.git#v1.0.0'}     | ${GitTagsDatasource.id}    | ${'ssh://git@bitbucket.corp:7999/proj/repo.git'} | ${undefined}
+      ${'http://git.local:8080/owner/repo.git#v1.0.0'}            | ${GitTagsDatasource.id}    | ${'http://git.local:8080/owner/repo.git'}        | ${undefined}
+      ${'https://dev.azure.com/org/proj/_git/repo#v1.0.0'}        | ${GitTagsDatasource.id}    | ${'https://dev.azure.com/org/proj/_git/repo'}    | ${undefined}
+    `(
+      'looks up $entry with $datasource',
+      ({ entry, datasource, packageName, registryUrls }) => {
+        const content = codeBlock`
+          dependencies:
+            apm:
+              - ${entry}
+        `;
+        expect(extractPackageFile(content, packageFile)?.deps).toEqual([
+          {
+            depName: entry.slice(0, entry.indexOf('#')),
+            depType: 'apm',
+            currentValue: 'v1.0.0',
+            datasource,
+            packageName,
+            ...(registryUrls ? { registryUrls } : {}),
+            replaceString: entry,
+            autoReplaceStringTemplate: template,
+          },
+        ]);
+      },
+    );
+
+    it('keeps the @alias of an SSH entry when updating its ref', () => {
+      const content = codeBlock`
+        dependencies:
+          apm:
+            - git@github.com:owner/repo.git#v1.0.0@my-alias
+      `;
+      expect(extractPackageFile(content, packageFile)?.deps).toEqual([
+        {
+          depName: 'git@github.com:owner/repo.git',
+          depType: 'apm',
+          currentValue: 'v1.0.0',
+          datasource: GithubTagsDatasource.id,
+          packageName: 'owner/repo',
+          replaceString: 'git@github.com:owner/repo.git#v1.0.0@my-alias',
+          autoReplaceStringTemplate:
+            '{{depName}}#{{#if newDigest}}{{newDigest}}@my-alias # {{newValue}}{{else}}{{newValue}}@my-alias{{/if}}',
+        },
+      ]);
+    });
+
+    it('recovers the tag comment of a SHA-pinned SSH entry with an @alias', () => {
+      const content = codeBlock`
+        dependencies:
+          apm:
+            - git@github.com:owner/repo.git#${sha}@my-alias # v1.0.0
+      `;
+      expect(extractPackageFile(content, packageFile)?.deps).toMatchObject([
+        {
+          currentValue: 'v1.0.0',
+          currentDigest: sha,
+          replaceString: `git@github.com:owner/repo.git#${sha}@my-alias # v1.0.0`,
+        },
+      ]);
+    });
+
+    it('reads an @ in an HTTPS ref as part of the ref, as APM does', () => {
+      const content = codeBlock`
+        dependencies:
+          apm:
+            - https://github.com/owner/repo.git#v1.0.0@my-alias
+      `;
+      expect(extractPackageFile(content, packageFile)?.deps).toMatchObject([
+        {
+          currentValue: 'v1.0.0@my-alias',
+          autoReplaceStringTemplate: template,
+        },
+      ]);
+    });
+
+    it('skips a clone URL with no ref', () => {
+      const content = codeBlock`
+        dependencies:
+          apm:
+            - git@github.com:owner/repo.git
+      `;
+      expect(extractPackageFile(content, packageFile)?.deps).toEqual([
+        {
+          depName: 'git@github.com:owner/repo.git',
+          depType: 'apm',
+          skipReason: 'unspecified-version',
+        },
+      ]);
+    });
+
+    it.each`
+      entry
+      ${'https://github.com#v1.0.0'}
+      ${'ssh://git@host:not-a-port/owner/repo.git#v1.0.0'}
+    `('marks $entry as invalid', ({ entry }) => {
+      const content = codeBlock`
+        dependencies:
+          apm:
+            - ${entry}
+      `;
+      expect(extractPackageFile(content, packageFile)?.deps).toEqual([
+        {
+          depName: entry.slice(0, entry.indexOf('#')),
+          depType: 'apm',
+          currentValue: 'v1.0.0',
+          skipReason: 'invalid-dependency-specification',
+        },
+      ]);
+    });
+  });
 });

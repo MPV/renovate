@@ -1,7 +1,7 @@
 The `apm` manager keeps [APM (Agent Package Manager)](https://github.com/microsoft/apm) dependencies up to date.
 
 Renovate reads the `apm.yml` manifest and updates the git-pinned entries under `dependencies.apm` and `devDependencies.apm`.
-Each entry uses the form `[host/]owner/repo[/subpath]#<ref>`, for example:
+Each entry is either the shorthand `[host/]owner/repo[/subpath]#<ref>` or a clone URL followed by `#<ref>`, for example:
 
 ```yaml
 name: your-project
@@ -10,10 +10,16 @@ dependencies:
   apm:
     - microsoft/apm-sample-package#v1.0.0
     - gitlab.com/team/project#v2.3.0
+    - git@gitlab.com:team/other-project.git#v1.4.0
 devDependencies:
   apm:
     - owner/repo#v1.2.3
 ```
+
+A clone URL can be `https://host/owner/repo.git`, `git@host:owner/repo.git` or `ssh://git@host/owner/repo.git`.
+Renovate looks it up the same way as the shorthand for that host.
+On hosts without a tags API, Renovate lists the tags from the URL as written, so an SSH URL needs SSH access from wherever Renovate runs.
+An SSH entry can end in `@<alias>` after the ref, which Renovate keeps when it updates the ref.
 
 Only entries that pin an exact `#<ref>` are updated.
 Entries without a `#<ref>` are skipped because there is no version to bump.
