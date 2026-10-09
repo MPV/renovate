@@ -4,6 +4,7 @@ import { GitlabTagsDatasource } from '../../datasource/gitlab-tags/index.ts';
 
 export { updateArtifacts } from './artifacts.ts';
 export { extractPackageFile } from './extract.ts';
+export { getRangeStrategy } from './range.ts';
 
 export const displayName = 'APM';
 export const url = 'https://github.com/microsoft/apm';
