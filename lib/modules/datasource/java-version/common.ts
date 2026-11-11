@@ -38,6 +38,9 @@ function getVendor(name: string): JavaVendor {
   if (name.includes('graalvm-ce')) {
     return 'graalvm-ce';
   }
+  if (name.includes('graalvm-community')) {
+    return 'graalvm-community';
+  }
   return 'adoptium'; // Default for backwards compatibility
 }
 

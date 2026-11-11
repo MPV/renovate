@@ -649,6 +649,31 @@ describe('modules/datasource/java-version/index', () => {
         });
       });
 
+      it('returns only GraalVM Community JDK releases', async () => {
+        httpMock
+          .scope(graalvmRegistryUrl)
+          .get(graalvmBasePath)
+          .reply(200, [
+            ...releases,
+            miseJavaRelease('graalvm-community', '25.0.5.0.3', 'jre'),
+          ]);
+        const res = await getPkgReleases({
+          datasource,
+          packageName: 'graalvm-community-jdk',
+        });
+        expect(res).toEqual({
+          homepage: 'https://www.graalvm.org/',
+          sourceUrl: 'https://github.com/graalvm/graalvm-ce-builds',
+          registryUrl: 'https://mise-java.jdx.dev',
+          releases: [
+            {
+              version: '25.0.5.0.3',
+              releaseTimestamp: '2025-03-28T22:04:28.484Z',
+            },
+          ],
+        });
+      });
+
       it('omits the timestamp when created_at is missing or invalid', async () => {
         httpMock
           .scope(graalvmRegistryUrl)
@@ -673,6 +698,10 @@ describe('modules/datasource/java-version/index', () => {
           graalvmRegistryUrl,
         ]);
         expect(ds.supportsCustomRegistry('graalvm-ce-jdk')).toBeTrue();
+        expect(ds.getDefaultRegistryUrls('graalvm-community-jdk')).toEqual([
+          graalvmRegistryUrl,
+        ]);
+        expect(ds.supportsCustomRegistry('graalvm-community-jdk')).toBeTrue();
       });
     });
   });

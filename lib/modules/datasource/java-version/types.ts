@@ -1,6 +1,7 @@
 import type { Nullish } from '../../../types/index.ts';
 
-export type JavaVendor = 'adoptium' | 'oracle-graalvm' | 'graalvm-ce';
+export type JavaVendor =
+  'adoptium' | 'oracle-graalvm' | 'graalvm-ce' | 'graalvm-community';
 export type GraalvmVendor = Exclude<JavaVendor, 'adoptium'>;
 export type GraalvmReleaseType = 'ga' | 'ea';
 
