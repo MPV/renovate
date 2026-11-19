@@ -421,6 +421,18 @@ export const upgradeableTooling: Record<string, ToolingDefinition> = {
           currentValue: adoptOpenJreMatches.version,
         };
       }
+      // GraalVM CE for JDK 17 and later, e.g. `graalvm-community-25.0.5.0.3`
+      const graalvmCommunityMatches = regEx(
+        /^graalvm-community-(?<version>\d+(?:\.\d+)+)$/,
+      ).exec(version)?.groups;
+      if (graalvmCommunityMatches) {
+        return {
+          datasource: JavaVersionDatasource.id,
+          packageName: 'graalvm-community-jdk',
+          currentValue: graalvmCommunityMatches.version,
+          versioning: looseVersioning.id,
+        };
+      }
       // GraalVM CE releases up to 22.3, one build per Java major,
       // e.g. `graalvm-22.3.1+java17`
       const graalvmCeMatches = regEx(

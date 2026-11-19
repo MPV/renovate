@@ -5172,7 +5172,7 @@ describe('workers/repository/process/lookup/index', () => {
       ]);
     });
 
-    describe('asdf GraalVM CE pins', () => {
+    describe('asdf GraalVM pins', () => {
       // asdf: `java graalvm-<currentValue>+java<javaMajor>`
       function graalvmCeConfig(currentValue: string, javaMajor: string): void {
         config.datasource = JavaVersionDatasource.id;
@@ -5227,6 +5227,31 @@ describe('workers/repository/process/lookup/index', () => {
           ).unwrapOrThrow();
 
           expect(updates).toBeEmptyArray();
+        },
+      );
+
+      it.each`
+        currentValue    | updateType
+        ${'25.0.1'}     | ${'patch'}
+        ${'25.0.4.1.1'} | ${'patch'}
+        ${'22.0.2'}     | ${'major'}
+        ${'17.0.7'}     | ${'major'}
+      `(
+        'updates graalvm-community-$currentValue to 25.0.5.0.3 ($updateType)',
+        async ({ currentValue, updateType }) => {
+          graalvmCeConfig(currentValue, '17');
+          config.packageName = 'graalvm-community-jdk';
+          delete config.extractVersion;
+
+          const { updates } = await Result.wrap(
+            lookup.lookupUpdates(config),
+          ).unwrapOrThrow();
+
+          expect(updates.at(-1)).toMatchObject({
+            newValue: '25.0.5.0.3',
+            updateType,
+            releaseTimestamp: '2026-11-04T01:55:52.002Z',
+          });
         },
       );
 

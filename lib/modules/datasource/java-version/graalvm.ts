@@ -29,6 +29,12 @@ const miseJavaVendors: Record<GraalvmVendor, MiseJavaVendor> = {
     homepage: 'https://www.graalvm.org/',
     sourceUrl: 'https://github.com/graalvm/graalvm-ce-builds',
   },
+  // GraalVM Community Edition for JDK 17 and later, e.g. `25.0.5.0.3`
+  'graalvm-community': {
+    vendor: 'graalvm-community',
+    homepage: 'https://www.graalvm.org/',
+    sourceUrl: 'https://github.com/graalvm/graalvm-ce-builds',
+  },
 };
 
 export async function getGraalvmReleases(

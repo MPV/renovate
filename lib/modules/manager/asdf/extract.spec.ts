@@ -1035,11 +1035,36 @@ awscli    2.8.6
       ${'graalvm-22.3.1+java'}
       ${'graalvm-22+java17'}
       ${'graalvm-community-22.3.1+java17'}
+      ${'graalvm-community-25'}
+      ${'graalvm-community-jdk-25.0.1'}
     `('skips unsupported java GraalVM CE $version', ({ version }) => {
       expect(extractPackageFile(`java ${version}`)).toEqual({
         deps: [{ depName: 'java', skipReason: 'unsupported-datasource' }],
       });
     });
+
+    it.each`
+      version                           | currentValue
+      ${'graalvm-community-25.0.1'}     | ${'25.0.1'}
+      ${'graalvm-community-22.0.2'}     | ${'22.0.2'}
+      ${'graalvm-community-25.0.5.0.3'} | ${'25.0.5.0.3'}
+      ${'graalvm-community-25.0.4.1.1'} | ${'25.0.4.1.1'}
+    `(
+      'can handle java GraalVM Community $version',
+      ({ version, currentValue }) => {
+        expect(extractPackageFile(`java ${version}`)).toEqual({
+          deps: [
+            {
+              currentValue,
+              datasource: 'java-version',
+              depName: 'java',
+              packageName: 'graalvm-community-jdk',
+              versioning: 'loose',
+            },
+          ],
+        });
+      },
+    );
 
     it('can handle scala v 2 & 3', () => {
       const v2Res = extractPackageFile('scala 2.0.0');

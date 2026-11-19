@@ -33,6 +33,7 @@ The following `packageName` values are supported:
 | ------------------------------------------ | -------------------------------------------------------------- | --------------- |
 | `oracle-graalvm-jdk`, `oracle-graalvm-jre` | Oracle GraalVM                                                 | `25.0.1`        |
 | `graalvm-ce-jdk`                           | GraalVM Community Edition up to 22.3, one build per Java major | `22.3.3+java17` |
+| `graalvm-community-jdk`                    | GraalVM Community Edition for JDK 17 and later                 | `25.0.5.0.3`    |
 
 These packages default to `os=linux` and `architecture=x86_64`.
 Pass `os` and `architecture`, or `system=true`, to use other values, for example `graalvm-ce-jdk?os=macosx&architecture=aarch64`.
